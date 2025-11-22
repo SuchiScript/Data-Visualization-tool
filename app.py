@@ -157,14 +157,13 @@ try:
             st.error("Select both X and Y columns for Heatmap.")
             st.stop()
 
-        value_col = color_col
-        if value_col is None:
-            if not numeric_cols:
+        if color_col is None:
+            if numeric_cols.empty:
                 st.error("No numeric column available for heatmap coloring.")
                 st.stop()
-            value_col = numeric_cols[0]
+            color_col = numeric_cols.columns[0]
 
-        if not pd.api.types.is_numeric_dtype(filtered[value_col]):
+        if not pd.api.types.is_numeric_dtype(filtered[color_col]):
             aggfunc = "count"
         else:
             aggfunc = "mean"
@@ -172,7 +171,7 @@ try:
         try:
             pivot = (
                 filtered
-                .groupby([y_col, x_col])[value_col]
+                .groupby([y_col, x_col])[color_col]
                 .agg(aggfunc)
                 .unstack(fill_value=0)
             )
@@ -180,8 +179,8 @@ try:
             fig = px.imshow(
                 pivot,
                 aspect="auto",
-                labels={"x": x_col, "y": y_col, "color": value_col},
-                title=f"Heatmap ({value_col})",
+                labels={"x": x_col, "y": y_col, "color": color_col},
+                title=f"Heatmap ({color_col})",
             )
         except Exception as e:
             st.error(f"Could not create heatmap: {e}")
