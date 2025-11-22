@@ -1,4 +1,4 @@
-# Mid-level Data Visualization Tool
+# Data Visualization Tool
 
 This is a mid-level data visualization web application built with Python, Streamlit, pandas/numpy, Plotly and sqlite3.
 
