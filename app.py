@@ -9,17 +9,76 @@ import os
 from utils import infer_numeric_columns, infer_categorical_columns, apply_filters, summary_stats
 from components import dataset_uploader, df_preview
 import db
+import auth
 
 st.set_page_config(page_title='DataViz Tool', layout='wide')
 
-st.title('Data Visualization Tool')
-
-# Sidebar: dataset controls
-st.sidebar.header('Dataset')
+# Initialize session state
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+    st.session_state.username = None
+    st.session_state.user_id = None
 
 if 'df' not in st.session_state:
     st.session_state.df = None
     st.session_state.df_name = None
+
+# Authentication UI
+if not st.session_state.authenticated:
+    st.title('🔐 DataViz Tool - Login')
+    
+    tab1, tab2 = st.tabs(['Login', 'Sign Up'])
+    
+    with tab1:
+        st.subheader('Login to your account')
+        login_username = st.text_input('Username', key='login_username')
+        login_password = st.text_input('Password', type='password', key='login_password')
+        
+        col1, col2 = st.columns([1, 3])
+        if col1.button('Login', type='primary'):
+            authenticated, user_id = auth.verify_user(login_username, login_password)
+            if authenticated:
+                st.session_state.authenticated = True
+                st.session_state.username = login_username
+                st.session_state.user_id = user_id
+                st.success(f'Welcome back, {login_username}!')
+                st.rerun()
+            else:
+                st.error('Invalid username or password')
+    
+    with tab2:
+        st.subheader('Create a new account')
+        signup_username = st.text_input('Choose username', key='signup_username')
+        signup_password = st.text_input('Choose password', type='password', key='signup_password')
+        signup_password_confirm = st.text_input('Confirm password', type='password', key='signup_password_confirm')
+        
+        if st.button('Sign Up', type='primary'):
+            if signup_password != signup_password_confirm:
+                st.error('Passwords do not match')
+            else:
+                success, message = auth.create_user(signup_username, signup_password)
+                if success:
+                    st.success(message + ' - You can now login!')
+                else:
+                    st.error(message)
+    
+    st.stop()
+
+# Main Application (only shown if authenticated)
+st.title('📊 Data Visualization Tool')
+
+# Logout button in sidebar
+st.sidebar.markdown(f'**Logged in as:** {st.session_state.username}')
+if st.sidebar.button('Logout'):
+    st.session_state.authenticated = False
+    st.session_state.username = None
+    st.session_state.user_id = None
+    st.session_state.df = None
+    st.session_state.df_name = None
+    st.rerun()
+
+st.sidebar.markdown('---')
+st.sidebar.header('Dataset')
 
 # Load sample dataset
 if st.sidebar.button('Load sample dataset'):
@@ -33,22 +92,24 @@ if st.sidebar.button('Load sample dataset'):
 
 # Show saved datasets
 if st.sidebar.checkbox('Show saved datasets'):
-    rows = db.list_datasets()
+    rows = db.list_datasets(st.session_state.user_id)
     if rows:
+        st.sidebar.write(f'**Your datasets ({len(rows)}):**')
         for _id, name, uploaded_at in rows:
-            cols = st.sidebar.columns([3,1])
-            if cols[0].button(f'Load: {name}', key=f'load_{name}'):
-                df_loaded = db.load_dataset(name)
+            cols = st.sidebar.columns([3, 1])
+            if cols[0].button(f'📂 {name}', key=f'load_{name}_{_id}'):
+                df_loaded = db.load_dataset(name, st.session_state.user_id)
                 if df_loaded is not None:
                     st.session_state.df = df_loaded
                     st.session_state.df_name = name
                     st.success(f'Loaded dataset: {name}')
-            if cols[1].button('Delete', key=f'del_{name}'):
-                db.delete_dataset(name)
+                    st.rerun()
+            if cols[1].button('🗑️', key=f'del_{name}_{_id}'):
+                db.delete_dataset(name, st.session_state.user_id)
                 st.sidebar.success(f'Deleted: {name}')
-                st.experimental_rerun()
+                st.rerun()
     else:
-        st.sidebar.write('No saved datasets yet.')
+        st.sidebar.info('No saved datasets yet.')
 
 # File uploader
 uploaded_df, uploaded_name = dataset_uploader()
@@ -57,13 +118,13 @@ if uploaded_df is not None:
     st.session_state.df_name = uploaded_name
     if st.sidebar.checkbox('Auto-save uploaded dataset to DB'):
         try:
-            db.save_dataset(uploaded_name, uploaded_df)
+            db.save_dataset(uploaded_name, uploaded_df, st.session_state.user_id)
             st.sidebar.success('Uploaded dataset saved to DB')
         except Exception as e:
             st.sidebar.error(f'Could not save dataset: {e}')
 
 if st.session_state.df is None:
-    st.info('Upload a CSV or click "Load sample dataset" to begin.')
+    st.info('📤 Upload a CSV or click "Load sample dataset" to begin.')
     st.stop()
 
 df = st.session_state.df.copy()
@@ -124,7 +185,7 @@ groupby_cols = st.sidebar.multiselect('Group by columns (optional)', options=lis
 # Plot area
 st.header(f'{chart_type} chart')
 try:
-    numeric_cols = filtered.select_dtypes(include=[np.number])
+    numeric_cols_df = filtered.select_dtypes(include=[np.number])
     if chart_type == 'Scatter':
         fig = px.scatter(filtered, x=x_col, y=y_col, color=color_col, size=size_col, title='Scatter plot')
     elif chart_type == 'Line':
@@ -157,13 +218,14 @@ try:
             st.error("Select both X and Y columns for Heatmap.")
             st.stop()
 
-        if color_col is None:
-            if numeric_cols.empty:
+        value_col = color_col
+        if value_col is None:
+            if numeric_cols_df.empty:
                 st.error("No numeric column available for heatmap coloring.")
                 st.stop()
-            color_col = numeric_cols.columns[0]
+            value_col = numeric_cols_df.columns[0]
 
-        if not pd.api.types.is_numeric_dtype(filtered[color_col]):
+        if not pd.api.types.is_numeric_dtype(filtered[value_col]):
             aggfunc = "count"
         else:
             aggfunc = "mean"
@@ -171,7 +233,7 @@ try:
         try:
             pivot = (
                 filtered
-                .groupby([y_col, x_col])[color_col]
+                .groupby([y_col, x_col])[value_col]
                 .agg(aggfunc)
                 .unstack(fill_value=0)
             )
@@ -179,20 +241,21 @@ try:
             fig = px.imshow(
                 pivot,
                 aspect="auto",
-                labels={"x": x_col, "y": y_col, "color": color_col},
-                title=f"Heatmap ({color_col})",
+                labels={"x": x_col, "y": y_col, "color": value_col},
+                title=f"Heatmap ({value_col})",
             )
         except Exception as e:
             st.error(f"Could not create heatmap: {e}")
+            st.stop()
 
     elif chart_type == "Parallel Coordinates":
-        if numeric_cols.shape[1] < 2:
+        if numeric_cols_df.shape[1] < 2:
             st.error("Need at least 2 numeric columns for parallel coordinates.")
             st.stop()
 
         color_column = color_col
         if color_column is None:
-            color_column = numeric_cols.columns[0]
+            color_column = numeric_cols_df.columns[0]
 
         if not pd.api.types.is_numeric_dtype(filtered[color_column]):
             filtered["_color_code_"] = filtered[color_column].astype("category").cat.codes
@@ -203,13 +266,14 @@ try:
         try:
             fig = px.parallel_coordinates(
                 filtered,
-                dimensions=numeric_cols.columns,
+                dimensions=numeric_cols_df.columns,
                 color=color_field,
-                labels={col: col for col in numeric_cols.columns},
+                labels={col: col for col in numeric_cols_df.columns},
                 title=f"Parallel Coordinates (colored by {color_column})"
             )
         except Exception as e:
             st.error(f"Could not create parallel coordinates: {e}")
+            st.stop()
 
     st.plotly_chart(fig, use_container_width=True)
 except Exception as e:
@@ -223,16 +287,16 @@ st.sidebar.download_button('Download filtered CSV', data=csv_bytes, file_name='f
 # Save dataset
 st.sidebar.header('Save')
 save_name = st.sidebar.text_input('Name to save current filtered dataset as (optional)')
-if st.sidebar.button('Save to DB'):
+if st.sidebar.button('💾 Save to DB'):
     if save_name:
         try:
-            db.save_dataset(save_name, filtered)
-            st.sidebar.success('Saved dataset to DB')
+            db.save_dataset(save_name, filtered, st.session_state.user_id)
+            st.sidebar.success(f'Saved dataset "{save_name}" to DB')
         except Exception as e:
             st.sidebar.error(f'Could not save: {e}')
     else:
         st.sidebar.error('Please enter a name to save')
 
 # Show summary
-with st.expander('Data summary'):
+with st.expander('📊 Data summary'):
     st.write(summary_stats(filtered))
