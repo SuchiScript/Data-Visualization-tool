@@ -25,7 +25,7 @@ if 'df' not in st.session_state:
 
 # Authentication UI
 if not st.session_state.authenticated:
-    st.title('🔐 DataViz Tool - Login')
+    st.title('DataViz Tool - Login')
     
     tab1, tab2 = st.tabs(['Login', 'Sign Up'])
     
@@ -36,15 +36,16 @@ if not st.session_state.authenticated:
         
         col1, col2 = st.columns([1, 3])
         if col1.button('Login', type='primary'):
-            authenticated, user_id = auth.verify_user(login_username, login_password)
-            if authenticated:
+            user_id = auth.authenticate(login_username, login_password)
+            if user_id is not None:
                 st.session_state.authenticated = True
                 st.session_state.username = login_username
                 st.session_state.user_id = user_id
                 st.success(f'Welcome back, {login_username}!')
                 st.rerun()
             else:
-                st.error('Invalid username or password')
+                st.error("Invalid username or password")
+
     
     with tab2:
         st.subheader('Create a new account')
@@ -56,16 +57,17 @@ if not st.session_state.authenticated:
             if signup_password != signup_password_confirm:
                 st.error('Passwords do not match')
             else:
-                success, message = auth.create_user(signup_username, signup_password)
+                success = auth.create_user(signup_username, signup_password)
                 if success:
-                    st.success(message + ' - You can now login!')
+                    st.success("Account created successfully! You can now login.")
                 else:
-                    st.error(message)
+                    st.error("Username already exists.")
+
     
     st.stop()
 
 # Main Application (only shown if authenticated)
-st.title('📊 Data Visualization Tool')
+st.title('Data Visualization Tool')
 
 # Logout button in sidebar
 st.sidebar.markdown(f'**Logged in as:** {st.session_state.username}')
@@ -130,8 +132,6 @@ if st.session_state.df is None:
 df = st.session_state.df.copy()
 
 st.sidebar.markdown('---')
-if st.sidebar.checkbox('Show raw data'):
-    df_preview(df)
 
 st.sidebar.header('Explore & Filter')
 numeric_cols = infer_numeric_columns(df)
@@ -164,6 +164,18 @@ with st.sidebar.expander('Add filters'):
 # Apply filters
 filtered = apply_filters(df, filters) if filters else df.copy()
 st.sidebar.write(f'Filtered rows: {len(filtered)}')
+
+st.sidebar.header('Data Views')
+
+# Show raw data
+if st.sidebar.checkbox('Show raw data'):
+    st.subheader("Raw Data")
+    df_preview(df)
+
+# Show filtered data
+if st.sidebar.checkbox('Show filtered data'):
+    st.subheader("Filtered Data")
+    df_preview(filtered)
 
 # Visualization controls
 st.sidebar.header('Visualization')
@@ -257,6 +269,7 @@ try:
         if color_column is None:
             color_column = numeric_cols_df.columns[0]
 
+        # Convert non-numeric color column to numeric codes
         if not pd.api.types.is_numeric_dtype(filtered[color_column]):
             filtered["_color_code_"] = filtered[color_column].astype("category").cat.codes
             color_field = "_color_code_"
@@ -268,9 +281,26 @@ try:
                 filtered,
                 dimensions=numeric_cols_df.columns,
                 color=color_field,
-                labels={col: col for col in numeric_cols_df.columns},
+                color_continuous_scale="Blues",
+                labels={color_field: color_column, **{col: col for col in numeric_cols_df.columns}},
                 title=f"Parallel Coordinates (colored by {color_column})"
             )
+
+            # Fix for first axis visibility
+            fig.update_layout(
+                margin=dict(l=80, r=80, t=80, b=80),
+                plot_bgcolor="white",
+                paper_bgcolor="white"
+            )
+
+            # Fix legend title to show the real color column name
+            fig.update_coloraxes(colorbar_title=color_column)
+
+            # Keep consistent color mapping
+            fig.update_traces(
+                line=dict(coloraxis="coloraxis")
+            )
+
         except Exception as e:
             st.error(f"Could not create parallel coordinates: {e}")
             st.stop()
@@ -298,5 +328,5 @@ if st.sidebar.button('💾 Save to DB'):
         st.sidebar.error('Please enter a name to save')
 
 # Show summary
-with st.expander('📊 Data summary'):
+with st.expander('Data summary'):
     st.write(summary_stats(filtered))

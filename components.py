@@ -16,7 +16,6 @@ def dataset_uploader(key: str = 'uploader') -> Tuple[pd.DataFrame, str]:
     return None, None
 
 def df_preview(df: pd.DataFrame):
-    st.subheader('Data preview')
     st.write(df.head())
     with st.expander('Show full data types and missing values'):
         st.write(pd.DataFrame({
