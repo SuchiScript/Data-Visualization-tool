@@ -31,6 +31,7 @@ This is a mid-level data visualization web application built with Python, Stream
 
 ## Included files
 - app.py : main Streamlit application
+- auth.py : for user authentication helper functions
 - utils.py : helper functions for filtering and aggregation
 - db.py : tiny sqlite3-backed dataset store
 - components.py : small UI helper components
