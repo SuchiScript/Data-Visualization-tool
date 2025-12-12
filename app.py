@@ -165,30 +165,66 @@ with st.sidebar.expander('Add filters'):
 filtered = apply_filters(df, filters) if filters else df.copy()
 st.sidebar.write(f'Filtered rows: {len(filtered)}')
 
+# Sorting functionality
+st.sidebar.header("Sort Data")
+
+sort_col = st.sidebar.selectbox(
+    "Sort by column",
+    options=[None] + list(df.columns),
+    index=0
+)
+
+sort_order = st.sidebar.radio(
+    "Sort order",
+    options=["Ascending", "Descending"],
+    horizontal=True
+)
+
+# Apply sorting to filtered DataFrame
+if sort_col is not None:
+    try:
+        filtered = filtered.sort_values(
+            by=sort_col,
+            ascending=(sort_order == "Ascending"),
+            na_position="last"
+        )
+    except Exception:
+        st.warning(f"⚠ Could not sort by '{sort_col}'. Sorting skipped.")
+
+
 st.sidebar.header('Data Views')
 
 # Show raw data
-if st.sidebar.checkbox('Show raw data'):
+if st.sidebar.checkbox('Show raw data (1st 5)'):
     st.subheader("Raw Data")
     df_preview(df)
 
 # Show filtered data
-if st.sidebar.checkbox('Show filtered data'):
+if st.sidebar.checkbox('Show filtered data (1st 5)'):
     st.subheader("Filtered Data")
     df_preview(filtered)
 
 # Visualization controls
 st.sidebar.header('Visualization')
 chart_type = st.sidebar.selectbox('Chart type', ['Scatter', 'Line', 'Bar', 'Histogram', 'Box', 'Pie', 'Heatmap', 'Parallel Coordinates'])
-x_col = st.sidebar.selectbox('X column', options=list(df.columns), index=0)
+if chart_type == 'Pie':
+    x_col = st.sidebar.selectbox('Names', options=list(df.columns), index=0)
+else:
+    x_col = st.sidebar.selectbox('X column', options=list(df.columns), index=0)
 # default y selection tries to pick a different column when possible
 default_y_idx = 1 if len(df.columns) > 1 else 0
 if chart_type not in ['Histogram', 'Parallel Coordinates']:
-    y_col = st.sidebar.selectbox('Y column', options=list(df.columns), index=default_y_idx)
+    if chart_type == 'Pie':
+        default_y_idx = 2 if len(df.columns) > 2 else 0
+        y_col = st.sidebar.selectbox('Values', options= [None] + list(df.columns), index=default_y_idx)
+    else:
+        y_col = st.sidebar.selectbox('Y column', options=list(df.columns), index=default_y_idx)
 else:
     y_col = None
-color_col = st.sidebar.selectbox('Color', options=[None] + list(df.columns), index=0)
-size_col = st.sidebar.selectbox('Size (scatter only)', options=[None] + list(numeric_cols), index=0)
+if chart_type != 'Pie':
+    color_col = st.sidebar.selectbox('Color', options=[None] + list(df.columns), index=0)
+if chart_type == 'Scatter':
+    size_col = st.sidebar.selectbox('Size (scatter only)', options=[None] + list(numeric_cols), index=0)
 
 # Aggregation
 agg_func = st.sidebar.selectbox('Aggregation function (for grouping)', ['mean', 'sum', 'count', 'median'])
@@ -199,10 +235,20 @@ st.header(f'{chart_type} chart')
 try:
     numeric_cols_df = filtered.select_dtypes(include=[np.number])
     if chart_type == 'Scatter':
+        if not pd.api.types.is_numeric_dtype(df[x_col]) or not pd.api.types.is_numeric_dtype(df[y_col]):
+            st.warning("Scatter plots work best with numeric X and Y columns.")
+        if len(filtered) > 50000:
+            st.warning("Large datasets may cause overplotting. Try filtering the data or using hexbin plots.")            
         fig = px.scatter(filtered, x=x_col, y=y_col, color=color_col, size=size_col, title='Scatter plot')
     elif chart_type == 'Line':
+        if not (pd.api.types.is_numeric_dtype(df[x_col]) or pd.api.types.is_datetime64_any_dtype(df[x_col])):
+            st.warning("Line charts typically require a time or numeric X-axis.")
+        if not filtered[x_col].is_monotonic_increasing:
+            st.info("Your X-axis is not sorted increasingly. Line charts may appear zig-zag. Consider sorting (ascending).")
         fig = px.line(filtered, x=x_col, y=y_col, color=color_col, title='Line chart')
     elif chart_type == 'Bar':
+        if not pd.api.types.is_numeric_dtype(df[y_col]):
+            st.warning("Bar height (Y) should typically be numeric.")
         if groupby_cols:
             agg = filtered.groupby(groupby_cols).agg({y_col: agg_func}).reset_index()
             # choose first group column for x-axis when multiple provided
@@ -211,19 +257,40 @@ try:
         else:
             fig = px.bar(filtered, x=x_col, y=y_col, color=color_col, title='Bar chart')
     elif chart_type == 'Histogram':
+        if not pd.api.types.is_numeric_dtype(df[x_col]):
+            st.warning("Histograms require a numeric X column.")
         nbins = st.sidebar.slider('Number of bins', 5, 200, 30)
         fig = px.histogram(filtered, x=x_col, nbins=nbins, color=color_col, title='Histogram')
     elif chart_type == 'Box':
+        if not pd.api.types.is_numeric_dtype(df[y_col]):
+            st.warning("Box plots require a numeric Y column.")
         fig = px.box(filtered, x=x_col, y=y_col, color=color_col, title='Box plot')
     elif chart_type == 'Pie':
-        # if y_col is None or non-numeric, count occurrences
+        # Warn user if Names column has too many unique values
+        if filtered[x_col].nunique() > 20:
+            st.warning(
+                f"⚠ The selected Names column '{x_col}' has {filtered[x_col].nunique()} unique values.\n"
+                "Pie charts become unreadable when there are more than ~20 categories."
+            )
+
+        # Case 1: No values selected -> count occurrences
         if y_col is None:
-            fig = px.pie(filtered, names=x_col, title='Pie chart')
+            fig = px.pie(filtered, names=x_col, title="Pie chart")
+
+        # Case 2: Values selected but NOT numeric -> warn + fallback
+        elif not pd.api.types.is_numeric_dtype(filtered[y_col]):
+            st.warning(
+                f"⚠ The selected Values column '{y_col}' is not numeric.\n"
+                f"Pie charts require numeric values. Falling back to counting occurrences of '{x_col}'."
+            )
+            fig = px.pie(filtered, names=x_col, title="Pie chart")
+
+        # Case 3: Values selected AND numeric → normal pie
         else:
-            try:
-                fig = px.pie(filtered, names=x_col, values=y_col, title='Pie chart')
-            except Exception:
-                fig = px.pie(filtered, names=x_col, title='Pie chart')
+            fig = px.pie(filtered, names=x_col, values=y_col, title="Pie chart")
+
+        # Legend title
+        fig.update_layout(legend_title_text=x_col)
 
     elif chart_type == "Heatmap":
         if x_col is None or y_col is None:
@@ -261,6 +328,8 @@ try:
             st.stop()
 
     elif chart_type == "Parallel Coordinates":
+        if color_col is not None and not pd.api.types.is_numeric_dtype(df[color_col]):
+            st.info("Color column is categorical — converted to numeric codes for visualization.")
         if numeric_cols_df.shape[1] < 2:
             st.error("Need at least 2 numeric columns for parallel coordinates.")
             st.stop()
