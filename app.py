@@ -183,7 +183,7 @@ chart_type = st.sidebar.selectbox('Chart type', ['Scatter', 'Line', 'Bar', 'Hist
 x_col = st.sidebar.selectbox('X column', options=list(df.columns), index=0)
 # default y selection tries to pick a different column when possible
 default_y_idx = 1 if len(df.columns) > 1 else 0
-if chart_type not in ['Histogram', 'Pie', 'Parallel Coordinates']:
+if chart_type not in ['Histogram', 'Parallel Coordinates']:
     y_col = st.sidebar.selectbox('Y column', options=list(df.columns), index=default_y_idx)
 else:
     y_col = None
